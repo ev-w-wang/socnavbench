@@ -1,0 +1,13 @@
+*.pid
+*.py[cod]
+*.log
+*.mp4
+__pycache__/
+*.egg-info/
+build/
+dist/
+sim_state_data/
+
+# Generated SocNavBench run artifacts. Keep compact tuning summaries/configs.
+SocNavBench/tests/socnav/test_MPPI/
+SocNavBench/tests/mppi_tuning/*/test_MPPI/

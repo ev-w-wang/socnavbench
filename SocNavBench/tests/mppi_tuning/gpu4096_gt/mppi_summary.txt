@@ -1,0 +1,43 @@
+{
+  "episodes": 33,
+  "metrics": {
+    "closest_pedestrian_distance": {
+      "mean": 1.0871822526164834,
+      "median": 0.9930173451454537
+    },
+    "goal_traversal_ratio": {
+      "mean": 0.0478060134319645,
+      "median": 0.02084001526236534
+    },
+    "mean_robot_speed": {
+      "mean": 0.498891975577483,
+      "median": 0.517257197301683
+    },
+    "navigation_time": {
+      "mean": 17.972727272727273,
+      "median": 16.05
+    },
+    "path_length": {
+      "mean": 17.203284003517844,
+      "median": 17.212648391723633
+    },
+    "path_length_ratio": {
+      "mean": 1.138367312551627,
+      "median": 1.0500299858794342
+    },
+    "robot_motion_energy": {
+      "mean": 365.81415442264444,
+      "median": 366.14556884765625
+    },
+    "wall_wait_time": {
+      "mean": 28.15613105802825,
+      "median": 25.926745176315308
+    }
+  },
+  "success_rate": 0.9696969696969697,
+  "successes": 32,
+  "termination_counts": {
+    "Pedestrian Collision": 1,
+    "Success": 32
+  }
+}

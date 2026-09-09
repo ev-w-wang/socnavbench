@@ -1,0 +1,16 @@
+name: socnavbench
+channels:
+  - defaults
+dependencies:
+  - python=3.6.9
+  - pandas==1.1.5
+  - pip
+  - pip:
+    - opencv-python==4.2.*
+    - matplotlib==3.3.4
+    - dotmap==1.2.39
+    - pyopengl==3.1.0
+    - pyassimp==4.1.3
+    - scikit-image==0.17.2
+    - scikit-fmm==2019.1.30
+    - numpy==1.19.2

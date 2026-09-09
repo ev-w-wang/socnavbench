@@ -1,0 +1,13 @@
+START 2026-08-25T15:29:08-05:00
+torch 1.10.2+cu113 NVIDIA GeForce RTX 3080
+samples=4096 horizon=60 iters=2 ang_frac=1.0
+START_gt 2026-08-25T15:29:10-05:00
+DONE_gt 2026-08-25T15:50:27-05:00
+gt_simulator_exit=0
+gt_joystick_exit=0
+START_orca 2026-08-25T15:50:27-05:00
+DONE_orca 2026-08-25T16:08:08-05:00
+orca_simulator_exit=0
+orca_joystick_exit=0
+GT_EC=0 ORCA_EC=0
+SUMMARY 2026-08-25T16:08:09-05:00

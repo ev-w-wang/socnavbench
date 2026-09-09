@@ -1,0 +1,94 @@
+GPU MPPI 4096-sample 33-episode suites
+=====================================
+
+Profile (policy.config [mppi], 2026-08-25)
+------------------------------------------
+use_gpu                         true   (RTX 3080, torch 1.10.2+cu113)
+num_samples                     4096   (was 256)
+horizon                         60     (was 40; 3.0 s at dt=0.05)
+num_iterations                  2      (unchanged)
+initial_sequence_angular_fraction 1.0  (was 0.5)
+temp / std_v / std_w            10 / 0.45 / 0.9  (unchanged)
+static_obs_clearance / weight   0.2 / 200        (unchanged)
+dynamic_obs_clearance / weight  0.55 / 750       (unchanged)
+v_min / v_max / w_max           0 / 1.2 / 1.1    (Dubins, no reverse)
+
+Why these changes
+-----------------
+num_samples = 4096
+  GPU rollouts are batched across samples and sequential across time. On this
+  3080, 256 and 4096 samples both planned in ~39 ms at horizon 40. Sixteen
+  times more Monte Carlo draws is the cheap GPU-native upgrade and is the
+  change most likely to recover the dense ETH / Univ pedestrian misses under
+  ORCA prediction.
+
+horizon = 60 (2.0 s -> 3.0 s)
+  Ground-truth MPPI already had zero pedestrian collisions at 256 samples.
+  The remaining failure, t_univ_trapTL, is a ~180 deg U-turn in a tight
+  alcove. At w_max=1.1 rad/s that turn takes ~2.85 s, which a 2.0 s horizon
+  cannot see. Horizon is sequential on GPU (~1.5x plan time, still near the
+  50 ms tick). This is the smallest look-ahead that covers that maneuver.
+  Iterations stayed at 2: extra iterations are also sequential and samples
+  already grew 16x.
+
+initial_sequence_angular_fraction = 1.0
+  The goal-directed warm start was spinning at 0.55 rad/s (half of w_max),
+  so even the nominal opening turn could not finish inside the old horizon.
+  Using the full yaw limit only changes the first plan's prior, not the
+  dynamics or costs.
+
+Left unchanged on purpose
+-------------------------
+static clearance / weight: raising them can close Univ/Hotel corridors that
+  already succeed. trapTL is first a horizon/kinematics issue.
+dynamic clearance / weight: already high from the 10-episode GT tune; more
+  samples should find safer ORCA paths without making the robot slower
+  everywhere.
+temperature: more samples already improve the weighted average; lowering
+  temp without a sweep risks peaky updates.
+v_min = 0: allowing reverse would help trapTL but is not a marginal MPPI
+  change and would break the Dubins comparison with the paper methods.
+num_iterations: sequential, not the GPU-cheap axis.
+
+Suites
+------
+gpu4096_gt    dynamic_prediction_method = ground_truth  (oracle ceiling)
+gpu4096_orca  dynamic_prediction_method = orca          (deployable)
+
+Superseded CPU artifacts were removed during repository cleanup. Their retained
+reference values are GT 256/h40: 32/33 and ORCA 256/h40: 29/33.
+
+Results
+-------
+Both suites finished cleanly (simulator/joystick exit 0).
+GT wall:  15:29:10 -> 15:50:27  (~21 min)
+ORCA wall: 15:50:27 -> 16:08:08  (~18 min)
+
+                    success   failures                         path(m)  nav(s)  energy(J)  wait(s)
+CPU GT 256/h40      32/33     trapTL obstacle                  17.04    18.26   356        269
+GPU GT 4096/h60     32/33     dhotel_bottopmid pedestrian      17.20    17.97   366         28
+CPU ORCA 256/h40    29/33     dense_against, dense_flow,       16.82    18.06   352        246
+                              trapBL ped, trapTL obstacle
+GPU ORCA 4096/h60   30/33     dhotel_bottopmid, dense_against, 16.33    17.46   348         22
+                              trapBL (all pedestrian)
+
+Reading
+-------
+This is a sidegrade on the oracle, a small upgrade on ORCA, and a GPU
+validity check.
+
+The horizon/init-yaw change did what it was for: t_univ_trapTL succeeds
+under both predictors (~29 s, path ratio ~1.6 — a slow U-turn, not a
+wall graze). t_eth_dense_flow also cleared on ORCA. The new miss,
+t_dhotel_bottopmid, is the same pedestrian clip on GT and ORCA (~4.2 s,
+~4.4 m, closest ped ~0.36 m). That is a different sampled path, not a
+GPU numerics bug: CPU/GPU RNGs differ, and the longer, more aggressive
+opening turn changes the early trajectory. Path, time, and energy stay
+in the CPU band. Planner wait dropped ~10x (269->28 s GT, 246->22 s
+ORCA). Horizon 60 is why wait is ~2x the 256-sample GPU 5-episode
+figure, not 16x from sample count.
+
+Taken as a baseline: GPU MPPI matches CPU behavior closely enough to
+trust, oracle ceiling is 32/33, deployable ORCA-pred is 30/33, and
+further success chasing is sampling/cost tradeoff rather than a
+CPU-vs-GPU issue.
