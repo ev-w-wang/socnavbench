@@ -122,6 +122,10 @@ horizon to 60 steps so the 3-second rollout could represent the
 
 ## Current reproducible profile
 
+The validated full-suite snapshots remain under `tests/mppi_tuning/gpu4096_*`.
+The active `policy.config` now adds the experimental prediction-risk envelope
+described below.
+
 - CUDA GPU backend (`use_gpu=true`)
 - seed 991, timestep 0.05 s
 - horizon 60 steps (3.0 s), 4096 samples, 2 iterations
@@ -130,10 +134,48 @@ horizon to 60 steps so the 3-second rollout could represent the
 - goal-directed warm start using the full angular limit
 - dynamic clearance/weight 0.55 m / 750
 - static clearance/weight 0.2 m / 200
+- trajectory-aligned uncertainty growth: 0.10 m/s longitudinally and
+  0.05 m/s laterally
+- Gaussian spatial risk with the support boundary at two standard deviations
+- future-risk discount 0.10 per second
+- temporal smearing ±3 steps (±0.15 s), with 0.10 s decay constant
 - ORCA pedestrian prediction for the deployable profile
 
 Detailed rationale is retained in
 `tests/mppi_tuning/gpu4096/NOTES.txt`.
+
+### Prediction-risk envelope
+
+The original loss treated each predicted pedestrian position as exact. The
+experimental loss preserves the hard `1e4` penalty for physical overlap with
+the nominal prediction, then forms a soft trajectory-aligned risk envelope:
+
+- The local direction of travel is estimated with a centered difference of
+  the predicted trajectory, with observed velocity and the x-axis as
+  fallbacks for stationary predictions.
+- Longitudinal and lateral semi-axes grow independently with lead time. The
+  active profile uses `growth * 1.0` longitudinally and `growth * 0.5`
+  laterally.
+- The pedestrian/robot collision radius and dynamic clearance inflate both
+  axes equally.
+- Spatial cost is Gaussian in normalized elliptical distance. The configured
+  sigma level of 2.0 makes cost at the support boundary
+  `exp(-0.5 * 2^2)`, or about 13.5% of center cost.
+- Future soft costs receive
+  `exp(-dynamic_uncertainty_discount * prediction_time)`. This discount is
+  deliberately mild and never weakens nominal physical-overlap penalties.
+- At robot timestep `t`, predictions in
+  `[t - dynamic_time_smear_steps, t + dynamic_time_smear_steps]` contribute
+  with weight `exp(-abs(offset) * dt / dynamic_time_smear_tau)`.
+- Costs across nearby prediction times use a maximum rather than a sum. This
+  avoids counting one pedestrian repeatedly while retaining the highest-risk
+  nearby timing.
+
+All parameters can be set to zero (`dynamic_time_smear_steps=0`,
+`dynamic_uncertainty_growth=0`, and
+`dynamic_uncertainty_discount=0`) to recover point-prediction behavior.
+CPU and GPU implementations share the same semantics and are covered by a
+numerical parity test.
 
 ## Current full-suite results
 
@@ -179,8 +221,8 @@ The runner executes ground truth followed by ORCA and writes compact summaries.
 - Ground truth is an oracle ceiling, not a deployable policy.
 - ORCA uses measured pedestrian velocity as preferred velocity and does not
   model static obstacles or the robot inside its prediction.
-- Dynamic predictions are deterministic points with fixed clearance; prediction
-  uncertainty and temporal smearing remain future experiments.
+- The uncertainty growth and timing kernel are heuristic rather than calibrated
+  from held-out trajectory-prediction errors.
 - Occupancy-grid clearance uses nearest-cell lookup.
 - CPU and GPU sampling use different random-number generators and are not
   expected to produce bit-identical trajectories.

@@ -1,0 +1,135 @@
+{
+  "episodes": [
+    {
+      "closest_pedestrian_distance": 3.0179306356671542,
+      "episode": "t_ETH1",
+      "goal_traversal_ratio": 0.03220327943563461,
+      "map": "ETH",
+      "mean_robot_speed": 0.5356232173931904,
+      "navigation_time": 9.850000000000001,
+      "path_length": 10.444652557373047,
+      "path_length_ratio": 0.9697625853718272,
+      "robot_motion_energy": 225.92849731445312,
+      "stopped_fraction": 0.5,
+      "stopped_time": 4.925000000000001,
+      "success": true,
+      "termination_cause": "Success",
+      "wall_wait_time": 20.617377758026123
+    },
+    {
+      "closest_pedestrian_distance": 1.1602048633147326,
+      "episode": "t_dhotel_bottopmid",
+      "goal_traversal_ratio": 0.016283949837088585,
+      "map": "DoubleHotel",
+      "mean_robot_speed": 0.5090696132851744,
+      "navigation_time": 22.35,
+      "path_length": 22.653596878051758,
+      "path_length_ratio": 1.0525182905854447,
+      "robot_motion_energy": 484.57745361328125,
+      "stopped_fraction": 0.5022471910112359,
+      "stopped_time": 11.225224719101124,
+      "success": true,
+      "termination_cause": "Success",
+      "wall_wait_time": 42.73633170127869
+    },
+    {
+      "closest_pedestrian_distance": 0.2859444060396322,
+      "episode": "t_eth_dense_against",
+      "goal_traversal_ratio": 0.7876227498054504,
+      "map": "ETH",
+      "mean_robot_speed": 0.4832903424656704,
+      "navigation_time": 4.9,
+      "path_length": 4.66375207901001,
+      "path_length_ratio": 0.2856852341238272,
+      "robot_motion_energy": 99.14695739746094,
+      "stopped_fraction": 0.5181347150259067,
+      "stopped_time": 2.538860103626943,
+      "success": false,
+      "termination_cause": "Pedestrian Collision",
+      "wall_wait_time": 9.088393688201904
+    },
+    {
+      "closest_pedestrian_distance": 0.4722763225553054,
+      "episode": "t_univ_trapBL",
+      "goal_traversal_ratio": 0.017718512564897537,
+      "map": "Univ",
+      "mean_robot_speed": 0.40265935192825575,
+      "navigation_time": 29.150000000000002,
+      "path_length": 23.394508361816406,
+      "path_length_ratio": 1.257697038774667,
+      "robot_motion_energy": 461.3963317871094,
+      "stopped_fraction": 0.5146299483648882,
+      "stopped_time": 15.001462994836492,
+      "success": true,
+      "termination_cause": "Success",
+      "wall_wait_time": 56.778024435043335
+    },
+    {
+      "closest_pedestrian_distance": 1.0864670169155344,
+      "episode": "t_zara1_dense_cross",
+      "goal_traversal_ratio": 0.028516724705696106,
+      "map": "Zara",
+      "mean_robot_speed": 0.43159237683598656,
+      "navigation_time": 22.0,
+      "path_length": 18.903745651245117,
+      "path_length_ratio": 1.575312970937093,
+      "robot_motion_energy": 375.14642333984375,
+      "stopped_fraction": 0.5102739726027398,
+      "stopped_time": 11.226027397260275,
+      "success": true,
+      "termination_cause": "Success",
+      "wall_wait_time": 41.597745180130005
+    }
+  ],
+  "summary": {
+    "episodes": 5,
+    "metrics": {
+      "closest_pedestrian_distance": {
+        "mean": 1.2045646488984718,
+        "median": 1.0864670169155344
+      },
+      "goal_traversal_ratio": {
+        "mean": 0.17646904326975346,
+        "median": 0.028516724705696106
+      },
+      "mean_robot_speed": {
+        "mean": 0.47244698038165545,
+        "median": 0.4832903424656704
+      },
+      "navigation_time": {
+        "mean": 17.65,
+        "median": 22.0
+      },
+      "path_length": {
+        "mean": 16.012051105499268,
+        "median": 18.903745651245117
+      },
+      "path_length_ratio": {
+        "mean": 1.0281952239585719,
+        "median": 1.0525182905854447
+      },
+      "robot_motion_energy": {
+        "mean": 329.2391326904297,
+        "median": 375.14642333984375
+      },
+      "stopped_fraction": {
+        "mean": 0.5090571654009541,
+        "median": 0.5102739726027398
+      },
+      "stopped_time": {
+        "mean": 8.983315042964968,
+        "median": 11.225224719101124
+      },
+      "wall_wait_time": {
+        "mean": 34.16357455253601,
+        "median": 41.597745180130005
+      }
+    },
+    "success_rate": 0.8,
+    "successes": 4,
+    "termination_counts": {
+      "Pedestrian Collision": 1,
+      "Success": 4
+    }
+  }
+}

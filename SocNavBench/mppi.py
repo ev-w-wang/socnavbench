@@ -76,6 +76,13 @@ class MPPIController:
         static_obs_weight=100.0,
         dynamic_obs_clearance=0.3,
         dynamic_obs_weight=100.0,
+        dynamic_uncertainty_growth=0.0,
+        dynamic_uncertainty_longitudinal_scale=1.0,
+        dynamic_uncertainty_lateral_scale=0.5,
+        dynamic_uncertainty_sigma_level=2.0,
+        dynamic_uncertainty_discount=0.0,
+        dynamic_time_smear_steps=0,
+        dynamic_time_smear_tau=0.1,
         v_min=0.0,
         v_max=1.5,
         w_min=-2.84,
@@ -120,6 +127,25 @@ class MPPIController:
         self.static_obs_weight = static_obs_weight
         self.dynamic_obs_clearance = dynamic_obs_clearance
         self.dynamic_obs_weight = dynamic_obs_weight
+        self.dynamic_uncertainty_growth = max(
+            0.0, float(dynamic_uncertainty_growth)
+        )
+        self.dynamic_uncertainty_longitudinal_scale = max(
+            0.0, float(dynamic_uncertainty_longitudinal_scale)
+        )
+        self.dynamic_uncertainty_lateral_scale = max(
+            0.0, float(dynamic_uncertainty_lateral_scale)
+        )
+        self.dynamic_uncertainty_sigma_level = max(
+            float(dynamic_uncertainty_sigma_level), np.finfo(float).eps
+        )
+        self.dynamic_uncertainty_discount = max(
+            0.0, float(dynamic_uncertainty_discount)
+        )
+        self.dynamic_time_smear_steps = max(0, int(dynamic_time_smear_steps))
+        self.dynamic_time_smear_tau = max(
+            float(dynamic_time_smear_tau), np.finfo(float).eps
+        )
         self.dynamic_prediction_method = dynamic_prediction_method
         self.orca_neighbor_dist = orca_neighbor_dist
         self.orca_max_neighbors = orca_max_neighbors
@@ -210,25 +236,12 @@ class MPPIController:
                     -static_clearance / 0.8
                 )
 
-        if dynamic_obstacles.shape[0] > 0:
-            # dynamic_obstacle_histories has shape (num_dynamic_obstacles, history_len, 2).
-            # dynamic_obstacle_history_mask marks which padded history slots are valid.
-            projected_dynamic_obstacle_pose = self.dynamic_obstacle_poses_at_timestep(
-                dynamic_obstacles,
-                dynamic_obstacle_predictions,
-                t,
-            )
-            dynamic_center_dists = np.linalg.norm(x_t[0:2] - projected_dynamic_obstacle_pose, axis=1)
-            dynamic_edge_dists = dynamic_center_dists - dynamic_obstacles[:, 2]
-            dynamic_in_range = dynamic_edge_dists < self.dynamic_obs_clearance
-            dynamic_costs = np.where(
-                dynamic_edge_dists < 0.0,
-                1e4,
-                np.where(dynamic_in_range, self.dynamic_obs_weight * np.exp(-dynamic_edge_dists / 0.8), 0.0),
-            )
-            dynamic_dist_cost = np.sum(dynamic_costs) #* (0.95**t)
-        else:
-            dynamic_dist_cost = 0.0
+        dynamic_dist_cost = self.dynamic_obstacle_cost(
+            x_t,
+            dynamic_obstacles,
+            dynamic_obstacle_predictions,
+            t,
+        )
 
         if distance_to_goal < self.slowdown_radius:
             speed_cost = self.stop_speed_weight * u_t[0] ** 2
@@ -257,6 +270,149 @@ class MPPIController:
             goal_cost + dist_cost + dynamic_dist_cost + control_effort_cost + speed_cost + heading_cost +
             progress_cost + control_smoothing_cost
         )
+
+    def dynamic_obstacle_cost(
+        self,
+        x_t,
+        dynamic_obstacles,
+        dynamic_obstacle_predictions,
+        t,
+    ):
+        """Trajectory-aligned Gaussian risk around pedestrian predictions.
+
+        The nominal prediction keeps a hard physical-overlap penalty. The
+        soft-risk support is elliptical along the predicted path and grows
+        with lead time. Nearby prediction times retain the existing temporal
+        smearing and maximum-cost aggregation.
+        """
+        if dynamic_obstacles.shape[0] == 0:
+            return 0.0
+
+        if dynamic_obstacle_predictions.shape[0] == 0:
+            predictions = dynamic_obstacles[np.newaxis, :, 0:2]
+            nominal_index = 0
+            nominal_time_index = max(0, int(t))
+            prediction_indices = np.array([nominal_time_index], dtype=int)
+            trajectory_directions = dynamic_obstacles[np.newaxis, :, 3:5]
+        else:
+            nominal_index = min(
+                max(0, int(t)),
+                dynamic_obstacle_predictions.shape[0] - 1,
+            )
+            nominal_time_index = nominal_index
+            start = max(0, nominal_index - self.dynamic_time_smear_steps)
+            stop = min(
+                dynamic_obstacle_predictions.shape[0],
+                nominal_index + self.dynamic_time_smear_steps + 1,
+            )
+            predictions = dynamic_obstacle_predictions[start:stop]
+            prediction_indices = np.arange(start, stop, dtype=int)
+            previous_indices = np.maximum(prediction_indices - 1, 0)
+            next_indices = np.minimum(
+                prediction_indices + 1,
+                dynamic_obstacle_predictions.shape[0] - 1,
+            )
+            trajectory_directions = (
+                dynamic_obstacle_predictions[next_indices]
+                - dynamic_obstacle_predictions[previous_indices]
+            )
+
+        direction_norms = np.linalg.norm(
+            trajectory_directions,
+            axis=2,
+            keepdims=True,
+        )
+        velocity_directions = np.broadcast_to(
+            dynamic_obstacles[np.newaxis, :, 3:5],
+            trajectory_directions.shape,
+        )
+        trajectory_directions = np.where(
+            direction_norms > np.finfo(float).eps,
+            trajectory_directions,
+            velocity_directions,
+        )
+        direction_norms = np.linalg.norm(
+            trajectory_directions,
+            axis=2,
+            keepdims=True,
+        )
+        default_directions = np.zeros_like(trajectory_directions)
+        default_directions[:, :, 0] = 1.0
+        unit_directions = np.where(
+            direction_norms > np.finfo(float).eps,
+            trajectory_directions
+            / np.maximum(direction_norms, np.finfo(float).eps),
+            default_directions,
+        )
+
+        offsets = np.abs(prediction_indices - nominal_time_index)
+        temporal_weights = np.exp(
+            -(offsets * self.dt) / self.dynamic_time_smear_tau
+        )
+        lead_times = (prediction_indices + 1).astype(float) * self.dt
+        longitudinal_uncertainty = (
+            self.dynamic_uncertainty_growth
+            * self.dynamic_uncertainty_longitudinal_scale
+            * lead_times
+        )
+        lateral_uncertainty = (
+            self.dynamic_uncertainty_growth
+            * self.dynamic_uncertainty_lateral_scale
+            * lead_times
+        )
+        future_weights = np.exp(
+            -self.dynamic_uncertainty_discount * lead_times
+        )
+
+        differences = x_t[np.newaxis, np.newaxis, 0:2] - predictions
+        longitudinal_distances = np.sum(
+            differences * unit_directions,
+            axis=2,
+        )
+        lateral_distances = (
+            -differences[:, :, 0] * unit_directions[:, :, 1]
+            + differences[:, :, 1] * unit_directions[:, :, 0]
+        )
+        base_support = (
+            dynamic_obstacles[np.newaxis, :, 2]
+            + self.dynamic_obs_clearance
+        )
+        longitudinal_support = (
+            base_support + longitudinal_uncertainty[:, np.newaxis]
+        )
+        lateral_support = base_support + lateral_uncertainty[:, np.newaxis]
+        normalized_distance_squared = (
+            (longitudinal_distances / longitudinal_support) ** 2
+            + (lateral_distances / lateral_support) ** 2
+        )
+        in_range = normalized_distance_squared < 1.0
+        soft_costs = np.where(
+            in_range,
+            self.dynamic_obs_weight
+            * np.exp(
+                -0.5
+                * self.dynamic_uncertainty_sigma_level ** 2
+                * normalized_distance_squared
+            )
+            * temporal_weights[:, np.newaxis]
+            * future_weights[:, np.newaxis],
+            0.0,
+        )
+        per_pedestrian_cost = np.max(soft_costs, axis=0)
+
+        nominal_pose = dynamic_obstacle_predictions[nominal_index] if (
+            dynamic_obstacle_predictions.shape[0] > 0
+        ) else dynamic_obstacles[:, 0:2]
+        nominal_edge_distances = (
+            np.linalg.norm(x_t[0:2] - nominal_pose, axis=1)
+            - dynamic_obstacles[:, 2]
+        )
+        per_pedestrian_cost = np.where(
+            nominal_edge_distances < 0.0,
+            1e4,
+            per_pedestrian_cost,
+        )
+        return float(np.sum(per_pedestrian_cost))
 
     def terminal_cost(self, x_t, goal):
         distance_to_goal = np.linalg.norm(x_t[0:2] - goal)
@@ -430,6 +586,13 @@ class GPUMPPIController:
         static_obs_weight=100.0,
         dynamic_obs_clearance=0.3,
         dynamic_obs_weight=100.0,
+        dynamic_uncertainty_growth=0.0,
+        dynamic_uncertainty_longitudinal_scale=1.0,
+        dynamic_uncertainty_lateral_scale=0.5,
+        dynamic_uncertainty_sigma_level=2.0,
+        dynamic_uncertainty_discount=0.0,
+        dynamic_time_smear_steps=0,
+        dynamic_time_smear_tau=0.1,
         v_min=0.0,
         v_max=1.5,
         w_min=-2.84,
@@ -478,6 +641,25 @@ class GPUMPPIController:
         self.static_obs_weight = static_obs_weight
         self.dynamic_obs_clearance = dynamic_obs_clearance
         self.dynamic_obs_weight = dynamic_obs_weight
+        self.dynamic_uncertainty_growth = max(
+            0.0, float(dynamic_uncertainty_growth)
+        )
+        self.dynamic_uncertainty_longitudinal_scale = max(
+            0.0, float(dynamic_uncertainty_longitudinal_scale)
+        )
+        self.dynamic_uncertainty_lateral_scale = max(
+            0.0, float(dynamic_uncertainty_lateral_scale)
+        )
+        self.dynamic_uncertainty_sigma_level = max(
+            float(dynamic_uncertainty_sigma_level), np.finfo(float).eps
+        )
+        self.dynamic_uncertainty_discount = max(
+            0.0, float(dynamic_uncertainty_discount)
+        )
+        self.dynamic_time_smear_steps = max(0, int(dynamic_time_smear_steps))
+        self.dynamic_time_smear_tau = max(
+            float(dynamic_time_smear_tau), np.finfo(float).eps
+        )
         self.dynamic_prediction_method = dynamic_prediction_method
         self.orca_neighbor_dist = orca_neighbor_dist
         self.orca_max_neighbors = orca_max_neighbors
@@ -584,6 +766,7 @@ class GPUMPPIController:
         robot_radius,
         std_diag,
         temp,
+        dt,
         t,
         previous_state,
         previous_control,
@@ -601,6 +784,13 @@ class GPUMPPIController:
         static_obs_weight,
         dynamic_obs_clearance,
         dynamic_obs_weight,
+        dynamic_uncertainty_growth,
+        dynamic_uncertainty_longitudinal_scale,
+        dynamic_uncertainty_lateral_scale,
+        dynamic_uncertainty_sigma_level,
+        dynamic_uncertainty_discount,
+        dynamic_time_smear_steps,
+        dynamic_time_smear_tau,
         control_smoothing_weight,
     ):
         distance_to_goal = torch.linalg.norm(state[:, :2] - goal, dim=1)
@@ -652,23 +842,158 @@ class GPUMPPIController:
             dist_cost = dist_cost + static_cost
 
         if dynamic_obstacles.shape[0] > 0:
-            # Match CPU MPPIController.dynamic_obstacle_poses_at_timestep.
             if dynamic_obstacle_predictions.shape[0] == 0:
-                projected_dynamic_obstacle_pose = dynamic_obstacles[:, 0:2]
+                predictions = dynamic_obstacles[None, :, 0:2]
+                nominal_index = 0
+                nominal_time_index = max(0, int(t))
+                prediction_indices = [nominal_time_index]
+                trajectory_directions = dynamic_obstacles[None, :, 3:5]
             else:
-                timestep = min(t, int(dynamic_obstacle_predictions.shape[0]) - 1)
-                projected_dynamic_obstacle_pose = dynamic_obstacle_predictions[timestep]
-            dynamic_diff = state[:, None, :2] - projected_dynamic_obstacle_pose[None, :, :]
-            dynamic_center_dists = torch.linalg.norm(dynamic_diff, dim=2)
-            dynamic_edge_dists = dynamic_center_dists - dynamic_obstacles[None, :, 2]
-            dynamic_in_range = dynamic_edge_dists < dynamic_obs_clearance
-            dynamic_collision_cost = torch.full_like(dynamic_edge_dists, 1e4)
-            dynamic_clearance_cost = dynamic_obs_weight * torch.exp(-dynamic_edge_dists / 0.8)
-            dynamic_dist_cost = torch.where(
-                dynamic_edge_dists < 0.0,
-                dynamic_collision_cost,
-                torch.where(dynamic_in_range, dynamic_clearance_cost, torch.zeros_like(dynamic_edge_dists)),
-            ).sum(dim=1)
+                nominal_index = min(
+                    max(0, int(t)),
+                    int(dynamic_obstacle_predictions.shape[0]) - 1,
+                )
+                nominal_time_index = nominal_index
+                start = max(0, nominal_index - int(dynamic_time_smear_steps))
+                stop = min(
+                    int(dynamic_obstacle_predictions.shape[0]),
+                    nominal_index + int(dynamic_time_smear_steps) + 1,
+                )
+                predictions = dynamic_obstacle_predictions[start:stop]
+                prediction_indices = list(range(start, stop))
+                previous_indices = [
+                    max(index - 1, 0) for index in prediction_indices
+                ]
+                next_indices = [
+                    min(
+                        index + 1,
+                        int(dynamic_obstacle_predictions.shape[0]) - 1,
+                    )
+                    for index in prediction_indices
+                ]
+                trajectory_directions = (
+                    dynamic_obstacle_predictions[next_indices]
+                    - dynamic_obstacle_predictions[previous_indices]
+                )
+
+            direction_norms = torch.linalg.norm(
+                trajectory_directions,
+                dim=2,
+                keepdim=True,
+            )
+            velocity_directions = dynamic_obstacles[None, :, 3:5].expand_as(
+                trajectory_directions
+            )
+            trajectory_directions = torch.where(
+                direction_norms > torch.finfo(state.dtype).eps,
+                trajectory_directions,
+                velocity_directions,
+            )
+            direction_norms = torch.linalg.norm(
+                trajectory_directions,
+                dim=2,
+                keepdim=True,
+            )
+            default_directions = torch.zeros_like(trajectory_directions)
+            default_directions[:, :, 0] = 1.0
+            unit_directions = torch.where(
+                direction_norms > torch.finfo(state.dtype).eps,
+                trajectory_directions
+                / direction_norms.clamp_min(torch.finfo(state.dtype).eps),
+                default_directions,
+            )
+
+            indices = torch.as_tensor(
+                prediction_indices,
+                device=state.device,
+                dtype=state.dtype,
+            )
+            temporal_weights = torch.exp(
+                -torch.abs(indices - float(nominal_time_index))
+                * float(dt)
+                / float(dynamic_time_smear_tau)
+            )
+            lead_times = (indices + 1.0) * float(dt)
+            longitudinal_uncertainty = (
+                float(dynamic_uncertainty_growth)
+                * float(dynamic_uncertainty_longitudinal_scale)
+                * lead_times
+            )
+            lateral_uncertainty = (
+                float(dynamic_uncertainty_growth)
+                * float(dynamic_uncertainty_lateral_scale)
+                * lead_times
+            )
+            future_weights = torch.exp(
+                -float(dynamic_uncertainty_discount) * lead_times
+            )
+
+            dynamic_diff = (
+                state[:, None, None, :2] - predictions[None, :, :, :]
+            )
+            longitudinal_dists = torch.sum(
+                dynamic_diff * unit_directions[None, :, :, :],
+                dim=3,
+            )
+            lateral_dists = (
+                -dynamic_diff[:, :, :, 0]
+                * unit_directions[None, :, :, 1]
+                + dynamic_diff[:, :, :, 1]
+                * unit_directions[None, :, :, 0]
+            )
+            base_support = (
+                dynamic_obstacles[None, :, 2]
+                + float(dynamic_obs_clearance)
+            )
+            longitudinal_support = (
+                base_support + longitudinal_uncertainty[:, None]
+            )
+            lateral_support = base_support + lateral_uncertainty[:, None]
+            normalized_distance_squared = (
+                (
+                    longitudinal_dists
+                    / longitudinal_support[None, :, :]
+                ) ** 2
+                + (
+                    lateral_dists
+                    / lateral_support[None, :, :]
+                ) ** 2
+            )
+            dynamic_in_range = normalized_distance_squared < 1.0
+            dynamic_clearance_cost = (
+                dynamic_obs_weight
+                * torch.exp(
+                    -0.5
+                    * float(dynamic_uncertainty_sigma_level) ** 2
+                    * normalized_distance_squared
+                )
+                * temporal_weights[None, :, None]
+                * future_weights[None, :, None]
+            )
+            per_pedestrian_cost = torch.where(
+                dynamic_in_range,
+                dynamic_clearance_cost,
+                torch.zeros_like(dynamic_clearance_cost),
+            ).max(dim=1)[0]
+
+            nominal_pose = (
+                dynamic_obstacle_predictions[nominal_index]
+                if dynamic_obstacle_predictions.shape[0] > 0
+                else dynamic_obstacles[:, 0:2]
+            )
+            nominal_edge_dists = (
+                torch.linalg.norm(
+                    state[:, None, :2] - nominal_pose[None, :, :],
+                    dim=2,
+                )
+                - dynamic_obstacles[None, :, 2]
+            )
+            per_pedestrian_cost = torch.where(
+                nominal_edge_dists < 0.0,
+                torch.full_like(per_pedestrian_cost, 1e4),
+                per_pedestrian_cost,
+            )
+            dynamic_dist_cost = per_pedestrian_cost.sum(dim=1)
         else:
             dynamic_dist_cost = torch.zeros(state.shape[0], device=state.device, dtype=state.dtype)
         v_des = torch.minimum(
@@ -759,6 +1084,7 @@ class GPUMPPIController:
                 robot_radius,
                 self.std_diag,
                 self.temp,
+                self.dt,
                 t,
                 previous_state,
                 previous_control,
@@ -776,6 +1102,13 @@ class GPUMPPIController:
                 self.static_obs_weight,
                 self.dynamic_obs_clearance,
                 self.dynamic_obs_weight,
+                self.dynamic_uncertainty_growth,
+                self.dynamic_uncertainty_longitudinal_scale,
+                self.dynamic_uncertainty_lateral_scale,
+                self.dynamic_uncertainty_sigma_level,
+                self.dynamic_uncertainty_discount,
+                self.dynamic_time_smear_steps,
+                self.dynamic_time_smear_tau,
                 self.control_smoothing_weight,
             )
             self._costs.add_(torch.where(active_mask, step_cost, torch.zeros_like(step_cost)))

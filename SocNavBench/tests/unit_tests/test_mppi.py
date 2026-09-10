@@ -61,6 +61,8 @@ def _test_config_and_factory():
     assert config["dt"] == 0.05
     assert config["v_max"] == 1.2
     assert config["w_max"] == 1.1
+    assert config["dynamic_time_smear_steps"] == 3
+    assert config["dynamic_uncertainty_growth"] == 0.10
     controller = build_mppi_controller(dict(config, use_gpu=False))
     assert isinstance(controller, MPPIController)
 
@@ -223,6 +225,10 @@ def _test_cpu_gpu_loss_match():
         num_samples=4,
         dt=0.05,
         temp=10.0,
+        dynamic_uncertainty_growth=0.2,
+        dynamic_uncertainty_discount=0.1,
+        dynamic_time_smear_steps=1,
+        dynamic_time_smear_tau=0.1,
         dynamic_prediction_method="constant_velocity",
     )
     x_t = np.array([1.0, 2.0, 0.3], dtype=float)
@@ -244,7 +250,7 @@ def _test_cpu_gpu_loss_match():
         predictions,
         histories,
         history_mask,
-        0,
+        1,
         x_prev,
         u_prev,
         None,
@@ -263,7 +269,8 @@ def _test_cpu_gpu_loss_match():
         0.1,
         torch.tensor(cpu.std_diag, dtype=torch.float32, device="cuda"),
         cpu.temp,
-        0,
+        cpu.dt,
+        1,
         torch.tensor(x_prev[None], dtype=torch.float32, device="cuda"),
         torch.tensor(u_prev[None], dtype=torch.float32, device="cuda"),
         cpu.goal_radius,
@@ -280,9 +287,99 @@ def _test_cpu_gpu_loss_match():
         cpu.static_obs_weight,
         cpu.dynamic_obs_clearance,
         cpu.dynamic_obs_weight,
+        cpu.dynamic_uncertainty_growth,
+        cpu.dynamic_uncertainty_longitudinal_scale,
+        cpu.dynamic_uncertainty_lateral_scale,
+        cpu.dynamic_uncertainty_sigma_level,
+        cpu.dynamic_uncertainty_discount,
+        cpu.dynamic_time_smear_steps,
+        cpu.dynamic_time_smear_tau,
         cpu.control_smoothing_weight,
     )
     assert np.allclose(cpu_loss, float(gpu_loss.cpu()), atol=1e-4)
+
+
+def _test_prediction_uncertainty_cost():
+    dynamic = np.array([[0.0, 0.0, 0.4, 1.0, 0.0]], dtype=float)
+    predictions = np.array(
+        [[[0.0, 0.0]], [[1.0, 0.0]], [[2.0, 0.0]]],
+        dtype=float,
+    )
+    no_uncertainty = MPPIController(
+        horizon=3,
+        dt=0.1,
+        dynamic_obs_clearance=0.3,
+        dynamic_obs_weight=100.0,
+        dynamic_prediction_method="constant_velocity",
+    )
+    uncertain = MPPIController(
+        horizon=3,
+        dt=0.1,
+        dynamic_obs_clearance=0.3,
+        dynamic_obs_weight=100.0,
+        dynamic_uncertainty_growth=1.0,
+        dynamic_uncertainty_longitudinal_scale=1.0,
+        dynamic_uncertainty_lateral_scale=0.5,
+        dynamic_uncertainty_sigma_level=2.0,
+        dynamic_time_smear_steps=1,
+        dynamic_time_smear_tau=0.1,
+        dynamic_prediction_method="constant_velocity",
+    )
+
+    # Spatial uncertainty expands the soft-risk footprint at later lead times.
+    position = np.array([2.75, 0.0, 0.0])
+    assert no_uncertainty.dynamic_obstacle_cost(
+        position, dynamic, predictions, 2
+    ) == 0.0
+    assert uncertain.dynamic_obstacle_cost(
+        position, dynamic, predictions, 2
+    ) > 0.0
+
+    # The uncertainty ellipse follows the path and is narrower laterally.
+    longitudinal_position = np.array([2.95, 0.0, 0.0])
+    lateral_position = np.array([2.0, 0.95, 0.0])
+    assert uncertain.dynamic_obstacle_cost(
+        longitudinal_position, dynamic, predictions, 2
+    ) > 0.0
+    assert uncertain.dynamic_obstacle_cost(
+        lateral_position, dynamic, predictions, 2
+    ) == 0.0
+
+    # Gaussian spatial risk decreases continuously away from the center.
+    near_position = np.array([2.41, 0.0, 0.0])
+    middle_position = np.array([2.7, 0.0, 0.0])
+    edge_position = np.array([2.95, 0.0, 0.0])
+    near_cost = uncertain.dynamic_obstacle_cost(
+        near_position, dynamic, predictions, 2
+    )
+    middle_cost = uncertain.dynamic_obstacle_cost(
+        middle_position, dynamic, predictions, 2
+    )
+    edge_cost = uncertain.dynamic_obstacle_cost(
+        edge_position, dynamic, predictions, 2
+    )
+    assert near_cost > middle_cost > edge_cost > 0.0
+
+    # Temporal smearing detects a nearby adjacent-time prediction.
+    position = np.array([0.45, 0.0, 0.0])
+    assert uncertain.dynamic_obstacle_cost(
+        position, dynamic, predictions, 1
+    ) > no_uncertainty.dynamic_obstacle_cost(
+        position, dynamic, predictions, 1
+    )
+
+    # Uncertainty and future discount never weaken nominal physical overlap.
+    discounted = MPPIController(
+        horizon=3,
+        dt=0.1,
+        dynamic_uncertainty_growth=1.0,
+        dynamic_uncertainty_discount=10.0,
+        dynamic_time_smear_steps=1,
+        dynamic_prediction_method="constant_velocity",
+    )
+    assert discounted.dynamic_obstacle_cost(
+        np.array([1.0, 0.0, 0.0]), dynamic, predictions, 1
+    ) >= 1e4
 
 
 def _test_gpu_factory():
@@ -304,6 +401,7 @@ def main_test():
     _test_modular_predictions()
     _test_cuda_rollout()
     _test_cpu_gpu_loss_match()
+    _test_prediction_uncertainty_cost()
     _test_gpu_factory()
     print("MPPI tests passed")
 

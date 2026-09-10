@@ -25,18 +25,38 @@ def _scalar(value, reduction="mean"):
     return value
 
 
+def _stopping_metrics(speed, navigation_time, threshold=0.05):
+    if speed is None:
+        return None, None
+    values = np.asarray(speed, dtype=float)
+    if values.size == 0:
+        return None, None
+    stopped_fraction = float(np.mean(values < threshold))
+    stopped_time = (
+        stopped_fraction * float(navigation_time)
+        if navigation_time is not None
+        else None
+    )
+    return stopped_fraction, stopped_time
+
+
 def load_results(root):
     rows = []
     pattern = os.path.join(root, "*", "episode_score_*.pkl")
     for filename in sorted(glob.glob(pattern)):
         with open(filename, "rb") as handle:
             metrics = pickle.load(handle)
+        navigation_time = _scalar(metrics.get("total_sim_time_taken"))
+        stopped_fraction, stopped_time = _stopping_metrics(
+            metrics.get("robot_speed"),
+            navigation_time,
+        )
         row = {
             "episode": os.path.basename(os.path.dirname(filename)),
             "success": bool(metrics.get("success", False)),
             "termination_cause": metrics.get("termination_cause"),
             "map": metrics.get("map"),
-            "navigation_time": _scalar(metrics.get("total_sim_time_taken")),
+            "navigation_time": navigation_time,
             "path_length": _scalar(metrics.get("path_length")),
             "path_length_ratio": _scalar(metrics.get("path_length_ratio")),
             "goal_traversal_ratio": _scalar(metrics.get("goal_traversal_ratio")),
@@ -44,6 +64,8 @@ def load_results(root):
                 metrics.get("closest_pedestrian_distance"), "min"
             ),
             "mean_robot_speed": _scalar(metrics.get("robot_speed")),
+            "stopped_fraction": stopped_fraction,
+            "stopped_time": stopped_time,
             "robot_motion_energy": _scalar(
                 metrics.get("robot_motion_energy")
             ),
@@ -61,6 +83,8 @@ def summarize(rows):
         "goal_traversal_ratio",
         "closest_pedestrian_distance",
         "mean_robot_speed",
+        "stopped_fraction",
+        "stopped_time",
         "robot_motion_energy",
         "wall_wait_time",
     ]

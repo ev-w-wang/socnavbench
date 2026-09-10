@@ -25,6 +25,7 @@ _INT_KEYS = {
     "num_iterations",
     "num_samples",
     "dynamic_history_len",
+    "dynamic_time_smear_steps",
     "orca_max_neighbors",
 }
 _STRING_KEYS = {
